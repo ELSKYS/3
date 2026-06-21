@@ -16,12 +16,36 @@ const {
     Events,
 } = require('discord.js');
 
-const TOKEN = process.env.TOKEN;
-const CLIENT_ID = process.env.CLIENT_ID;
+function normalizeEnv(value) {
+    return (value || '').trim().replace(/^["']|["']$/g, '');
+}
+
+const TOKEN = normalizeEnv(process.env.TOKEN).replace(/^Bot\s+/i, '');
+const CLIENT_ID = normalizeEnv(process.env.CLIENT_ID);
+const AUTO_SETUP_GUILD_ID = normalizeEnv(process.env.AUTO_SETUP_GUILD_ID);
+const SALES_SERVER_INVITE = normalizeEnv(process.env.SALES_SERVER_INVITE) || 'https://discord.gg/reddma';
+const SALES_STATUS_CHANNEL_NAME =
+    normalizeEnv(process.env.SALES_STATUS_CHANNEL_NAME) || 'firmware-status';
 const CONFIG_PATH = path.join(__dirname, 'guild-config.json');
 
-const VERIFIED_ROLE_NAME = '已验证';
-const UNVERIFIED_ROLE_NAME = '未验证';
+const VERIFIED_ROLE_NAME = 'Verified';
+const UNVERIFIED_ROLE_NAME = 'Unverified';
+const VERIFIED_ROLE_ALIASES = [VERIFIED_ROLE_NAME, '已验证'];
+const UNVERIFIED_ROLE_ALIASES = [UNVERIFIED_ROLE_NAME, '未验证'];
+
+const EMBED_TITLES = {
+    RULES: '📜 Server Rules',
+    VERIFY: '✅ Account Verification',
+    WELCOME: '👋 Welcome!',
+    WEBSITE: '🌐 Website & Products',
+    ANNOUNCEMENTS: '📢 Announcements',
+    SERVER_INFO: '🏠 About This Server',
+    FAQ: '❓ Frequently Asked Questions',
+    SALES_HUB: '🛒 Sales & Orders',
+    PURCHASE_GUIDE: '📦 How to Purchase',
+    SUGGESTIONS: '💡 Suggestions',
+    MEDIA: '📸 Media & Screenshots',
+};
 
 const client = new Client({
     intents: [
@@ -47,36 +71,43 @@ function saveAllConfig(data) {
 
 const SERVER_RULES = [
     {
-        title: '1. 尊重他人',
-        content: '禁止人身攻击、歧视、骚扰、威胁。请用文明用语交流，营造友好社区氛围。',
+        title: '1. Respect Others',
+        content:
+            'No harassment, discrimination, threats, or personal attacks. Keep conversations civil and welcoming.',
     },
     {
-        title: '2. 禁止垃圾信息',
-        content: '禁止无意义刷屏、重复发送相同内容、恶意 @全体成员 或大量 @他人。',
+        title: '2. No Spam',
+        content:
+            'Do not flood channels, repeat the same message, mass-mention members, or abuse @everyone.',
     },
     {
-        title: '3. 禁止未经许可的广告',
-        content: '未经管理员批准，不得推广其他 Discord 服务器、产品、链接或拉人行为。',
+        title: '3. No Unauthorized Promotion',
+        content:
+            'Do not advertise other servers, products, or referral links without staff approval.',
     },
     {
-        title: '4. 保护隐私',
-        content: '禁止泄露自己或他人的个人信息（电话、地址、支付信息等）。',
+        title: '4. Protect Privacy',
+        content:
+            'Never share personal information (phone numbers, addresses, payment details, etc.).',
     },
     {
-        title: '5. 遵守法律法规',
-        content: '禁止发布违法、色情、暴力、诈骗等违规内容。违者将立即封禁并可能上报。',
+        title: '5. Follow the Law',
+        content:
+            'Illegal, explicit, violent, or fraudulent content is prohibited and may be reported.',
     },
     {
-        title: '6. 正确使用频道',
-        content: '请在对应频道发言，不要在不相关频道发广告、求助或闲聊。',
+        title: '6. Use the Right Channels',
+        content: 'Post in the appropriate channel. Keep support, sales, and casual chat separated.',
     },
     {
-        title: '7. 交易与售后',
-        content: '购买、付款、售后请走官方工单渠道。私下交易风险自负，官方不承担责任。',
+        title: '7. Official Purchases Only',
+        content:
+            'All purchases and support tickets must go through official RED DMA channels. Private deals are at your own risk.',
     },
     {
-        title: '8. 服从管理',
-        content: '管理员对违规行为有最终处理权。对处罚有异议请私信管理员理性沟通，勿在公开频道争吵。',
+        title: '8. Staff Decisions Are Final',
+        content:
+            'Staff may warn, mute, or ban at their discretion. Disputes should be handled privately with an admin.',
     },
 ];
 
@@ -91,29 +122,28 @@ function saveGuildConfig(guildId, data) {
 }
 
 function buildRulesEmbed() {
-    const description = SERVER_RULES.map(
-        (rule) => `**${rule.title}**\n${rule.content}`
-    ).join('\n\n');
+    const description = SERVER_RULES.map((rule) => `**${rule.title}**\n${rule.content}`).join('\n\n');
 
     return new EmbedBuilder()
-        .setTitle('📜 服务器规则')
+        .setTitle(EMBED_TITLES.RULES)
         .setDescription(
-            '欢迎加入本服务器！请仔细阅读以下规则，完成验证后即可访问全部频道。\n\n' + description
+            'Welcome to the RED DMA community hub! Read the rules below, then complete verification to unlock all channels.\n\n' +
+                description
         )
         .setColor(0xef4444)
-        .setFooter({ text: '违反规则可能导致警告、禁言或封禁 • RED DMA' })
+        .setFooter({ text: 'Violations may result in warnings, mutes, or bans • RED DMA' })
         .setTimestamp();
 }
 
 function buildVerifyEmbed(rulesChannel) {
-    const rulesMention = rulesChannel ? `${rulesChannel}` : '#规则';
+    const rulesMention = rulesChannel ? `${rulesChannel}` : '#rules';
 
     return new EmbedBuilder()
-        .setTitle('✅ 账户验证')
+        .setTitle(EMBED_TITLES.VERIFY)
         .setDescription(
-            `请先阅读 ${rulesMention} 中的服务器规则。\n\n` +
-                '确认已阅读并同意遵守规则后，点击下方按钮完成验证。\n' +
-                '验证成功后，你将可以查看和参与社区其他频道。'
+            `Please read the server rules in ${rulesMention} first.\n\n` +
+                'Once you agree to follow the rules, click the button below to verify your account.\n' +
+                'After verification you will gain access to the rest of the community.'
         )
         .setColor(0x22c55e);
 }
@@ -122,54 +152,216 @@ function buildVerifyButtonRow() {
     return new ActionRowBuilder().addComponents(
         new ButtonBuilder()
             .setCustomId('verify_member')
-            .setLabel('我已阅读规则，立即验证')
+            .setLabel('I Agree — Verify Me')
             .setStyle(ButtonStyle.Success)
             .setEmoji('✅')
     );
 }
 
-function buildWelcomeEmbed(member, rulesChannel, verifyChannel) {
-    const rulesMention = rulesChannel ? `${rulesChannel}` : '规则频道';
-    const verifyMention = verifyChannel ? `${verifyChannel}` : '验证频道';
+function buildWelcomeEmbed(member, rulesChannel, verifyChannel, salesChannel) {
+    const rulesMention = rulesChannel ? `${rulesChannel}` : '#rules';
+    const verifyMention = verifyChannel ? `${verifyChannel}` : '#verification';
+    const salesMention = salesChannel ? `${salesChannel}` : '#sales-server';
 
     return new EmbedBuilder()
-        .setTitle('👋 欢迎加入！')
+        .setTitle(EMBED_TITLES.WELCOME)
         .setDescription(
-            `${member} 欢迎加入 **${member.guild.name}**！\n\n` +
-                `📌 第一步：请前往 ${rulesMention} 阅读服务器规则\n` +
-                `🔐 第二步：前往 ${verifyMention} 点击按钮完成验证\n\n` +
-                '完成验证后即可浏览全部频道，祝你在这里玩得开心！'
+            `${member}, welcome to **${member.guild.name}** — the official RED DMA community hub!\n\n` +
+                `📌 **Step 1:** Read the rules in ${rulesMention}\n` +
+                `🔐 **Step 2:** Verify in ${verifyMention}\n` +
+                `🛒 **Step 3:** For purchases & firmware status, visit ${salesMention}\n\n` +
+                'After verification you can explore announcements, chat, support, and more. Enjoy your stay!'
         )
         .setColor(0xef4444)
         .setThumbnail(member.user.displayAvatarURL({ size: 128 }))
         .setTimestamp();
 }
 
+function buildServerInfoEmbed(salesChannel) {
+    const salesMention = salesChannel ? `${salesChannel}` : '#sales-server';
+
+    return new EmbedBuilder()
+        .setTitle(EMBED_TITLES.SERVER_INFO)
+        .setDescription(
+            '**RED DMA Main Hub** is your home for community, announcements, and support.\n\n' +
+                '**What you can do here**\n' +
+                '• Read official announcements\n' +
+                '• Chat with the community\n' +
+                '• Get help and browse product info\n' +
+                '• Share feedback and suggestions\n\n' +
+                `**Purchases & firmware status**\n` +
+                `Orders, tickets, and live firmware updates are handled in our Sales Server.\n` +
+                `Head to ${salesMention} for the invite and channel guide.\n\n` +
+                '**Website:** https://reddma.xyz'
+        )
+        .setColor(0xef4444)
+        .setFooter({ text: 'RED DMA • Premium DMA Firmware' })
+        .setTimestamp();
+}
+
+function buildSalesHubEmbed() {
+    return new EmbedBuilder()
+        .setTitle(EMBED_TITLES.SALES_HUB)
+        .setDescription(
+            '**This is the main community server.** For everything related to buying, tickets, and live firmware status, join our **Sales Server**.\n\n' +
+                '**In the Sales Server you will find:**\n' +
+                `• **#${SALES_STATUS_CHANNEL_NAME}** — daily firmware status & discounts\n` +
+                '• Product catalog with ticket buttons\n' +
+                '• Purchase support and order handling\n' +
+                '• `/buy` command to open purchase tickets\n\n' +
+                'Click **Join Sales Server** below, then check the firmware status channel after you arrive.'
+        )
+        .setColor(0xf59e0b)
+        .setFooter({ text: 'Official invite • RED DMA Sales' });
+}
+
+function buildSalesHubButtons() {
+    return new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+            .setLabel('Join Sales Server')
+            .setStyle(ButtonStyle.Link)
+            .setURL(SALES_SERVER_INVITE)
+            .setEmoji('🛒'),
+        new ButtonBuilder()
+            .setLabel('Visit Website')
+            .setStyle(ButtonStyle.Link)
+            .setURL('https://reddma.xyz')
+            .setEmoji('🌐')
+    );
+}
+
+function buildPurchaseGuideEmbed(salesChannel) {
+    const salesMention = salesChannel ? `${salesChannel}` : '#sales-server';
+
+    return new EmbedBuilder()
+        .setTitle(EMBED_TITLES.PURCHASE_GUIDE)
+        .setDescription(
+            '**How to purchase RED DMA firmware**\n\n' +
+                `1. Go to ${salesMention} and join the Sales Server\n` +
+                `2. Check **#${SALES_STATUS_CHANNEL_NAME}** for current status and promos\n` +
+                '3. Browse products in the sales channels\n' +
+                '4. Click **Open Ticket** or run `/buy` to start your order\n' +
+                '5. Staff will guide you through payment and delivery\n\n' +
+                '**Important:** Only purchase through official RED DMA channels. Never trust third-party resellers unless verified by staff.'
+        )
+        .setColor(0x22c55e);
+}
+
+function buildFaqEmbed() {
+    return new EmbedBuilder()
+        .setTitle(EMBED_TITLES.FAQ)
+        .setDescription(
+            '**Quick answers**\n\n' +
+                '**Where do I buy?**\nJoin the Sales Server via #sales-server — purchases are not handled in this hub.\n\n' +
+                '**Where is firmware status posted?**\nDaily updates are in the Sales Server #' +
+                SALES_STATUS_CHANNEL_NAME +
+                ' channel.\n\n' +
+                '**I need help with my order**\nOpen a ticket in the Sales Server or ask in #help-support here for general questions.\n\n' +
+                '**Website**\nhttps://reddma.xyz'
+        )
+        .setColor(0x3b82f6);
+}
+
 function memberCanManage(interaction) {
     return interaction.member.permissions.has(PermissionFlagsBits.Administrator);
 }
 
-async function publishRulesToChannel(channel) {
-    const embed = buildRulesEmbed();
-    const messages = await channel.messages.fetch({ limit: 10 });
-    const existing = messages.find(
-        (m) => m.author.id === client.user.id && m.embeds[0]?.title === '📜 服务器规则'
+async function findChannelByNames(guild, names) {
+    const channels = await guild.channels.fetch();
+    return channels.find((channel) => names.includes(channel.name)) ?? null;
+}
+
+async function cleanupDuplicateAliasChannels(guild, canonicalChannel, aliases, reason) {
+    const channels = await guild.channels.fetch();
+    const duplicates = channels.filter(
+        (channel) =>
+            channel.id !== canonicalChannel.id &&
+            aliases.includes(channel.name) &&
+            channel.type === ChannelType.GuildText
     );
 
+    for (const duplicate of duplicates.values()) {
+        await duplicate.delete(reason).catch(() => {});
+    }
+}
+
+async function findCategoryByNames(guild, names) {
+    const channels = await guild.channels.fetch();
+    return (
+        channels.find((channel) => channel.type === ChannelType.GuildCategory && names.includes(channel.name)) ??
+        null
+    );
+}
+
+async function findOrCreateCategory(guild, { aliases, name, permissionOverwrites, reason }) {
+    let category = await findCategoryByNames(guild, [...aliases, name]);
+    if (category) {
+        if (category.name !== name) await category.setName(name, reason);
+        if (permissionOverwrites) await category.permissionOverwrites.set(permissionOverwrites);
+        return category;
+    }
+
+    return guild.channels.create({
+        name,
+        type: ChannelType.GuildCategory,
+        permissionOverwrites,
+        reason,
+    });
+}
+
+async function findOrCreateTextChannel(guild, { aliases, name, parent, topic, permissionOverwrites, reason }) {
+    let channel = await findChannelByNames(guild, [...aliases, name]);
+    if (channel) {
+        if (channel.name !== name) await channel.setName(name, reason);
+        if (topic) await channel.setTopic(topic, reason);
+        if (parent) await channel.setParent(parent.id, { lockPermissions: false });
+        if (permissionOverwrites) await channel.permissionOverwrites.set(permissionOverwrites);
+        return channel;
+    }
+
+    return guild.channels.create({
+        name,
+        type: ChannelType.GuildText,
+        parent: parent?.id,
+        topic,
+        permissionOverwrites,
+        reason,
+    });
+}
+
+async function findOrCreateRole(guild, { aliases, name, color, reason }) {
+    let role = guild.roles.cache.find((entry) => aliases.includes(entry.name));
+    if (role) {
+        if (role.name !== name) await role.setName(name, reason);
+        return role;
+    }
+
+    return guild.roles.create({ name, color, reason });
+}
+
+async function publishEmbedToChannel(channel, embed, options = {}) {
+    const { title, components } = options;
+    const messages = await channel.messages.fetch({ limit: 15 });
+    const existing = messages.find((message) => message.author.id === client.user.id && message.embeds[0]?.title === title);
+
     if (existing) {
-        await existing.edit({ embeds: [embed] });
+        await existing.edit({ embeds: [embed], components: components ?? [] });
         return existing;
     }
 
-    return channel.send({ embeds: [embed] });
+    return channel.send({ embeds: [embed], components: components ?? [] });
+}
+
+async function publishRulesToChannel(channel) {
+    return publishEmbedToChannel(channel, buildRulesEmbed(), { title: EMBED_TITLES.RULES });
 }
 
 async function publishVerifyToChannel(channel, rulesChannel) {
     const embed = buildVerifyEmbed(rulesChannel);
     const row = buildVerifyButtonRow();
-    const messages = await channel.messages.fetch({ limit: 10 });
+    const messages = await channel.messages.fetch({ limit: 15 });
     const existing = messages.find(
-        (m) => m.author.id === client.user.id && m.embeds[0]?.title === '✅ 账户验证'
+        (message) => message.author.id === client.user.id && message.embeds[0]?.title === EMBED_TITLES.VERIFY
     );
 
     if (existing) {
@@ -198,7 +390,10 @@ function buildVerifiedOnlyPermissions(guild, verifiedRoleId) {
 
 function buildPublicChannelPermissions(guild, verifiedRoleId) {
     return [
-        { id: guild.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory] },
+        {
+            id: guild.id,
+            allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory],
+        },
         {
             id: verifiedRoleId,
             allow: [
@@ -237,40 +432,56 @@ function buildReadOnlyPermissions(guild, verifiedRoleId) {
     ];
 }
 
+function buildOnboardingReadOnlyPermissions(guild) {
+    return [
+        {
+            id: guild.id,
+            allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory],
+            deny: [PermissionFlagsBits.SendMessages],
+        },
+        {
+            id: client.user.id,
+            allow: [
+                PermissionFlagsBits.ViewChannel,
+                PermissionFlagsBits.SendMessages,
+                PermissionFlagsBits.ManageChannels,
+            ],
+        },
+    ];
+}
+
 async function runOneClickSetup(guild) {
     const botMember = guild.members.me;
+    const setupReason = 'RED DMA main bot setup';
+
     if (!botMember.permissions.has(PermissionFlagsBits.ManageChannels)) {
-        throw new Error('机器人需要「管理频道」权限才能执行一键设置。');
+        throw new Error('The bot needs **Manage Channels** permission to run setup.');
     }
     if (!botMember.permissions.has(PermissionFlagsBits.ManageRoles)) {
-        throw new Error('机器人需要「管理角色」权限才能执行一键设置。');
+        throw new Error('The bot needs **Manage Roles** permission to run setup.');
     }
 
-    let verifiedRole = guild.roles.cache.find((r) => r.name === VERIFIED_ROLE_NAME);
-    if (!verifiedRole) {
-        verifiedRole = await guild.roles.create({
-            name: VERIFIED_ROLE_NAME,
-            color: 0x22c55e,
-            reason: '总群机器人一键设置',
-        });
-    }
+    const verifiedRole = await findOrCreateRole(guild, {
+        aliases: VERIFIED_ROLE_ALIASES,
+        name: VERIFIED_ROLE_NAME,
+        color: 0x22c55e,
+        reason: setupReason,
+    });
 
-    let unverifiedRole = guild.roles.cache.find((r) => r.name === UNVERIFIED_ROLE_NAME);
-    if (!unverifiedRole) {
-        unverifiedRole = await guild.roles.create({
-            name: UNVERIFIED_ROLE_NAME,
-            color: 0x94a3b8,
-            reason: '总群机器人一键设置',
-        });
-    }
+    const unverifiedRole = await findOrCreateRole(guild, {
+        aliases: UNVERIFIED_ROLE_ALIASES,
+        name: UNVERIFIED_ROLE_NAME,
+        color: 0x94a3b8,
+        reason: setupReason,
+    });
 
     if (verifiedRole.position >= botMember.roles.highest.position) {
-        throw new Error('请将机器人的角色拖到「已验证」角色之上，然后重新运行 /一键设置。');
+        throw new Error('Move the bot role above **Verified**, then run `/setup` again.');
     }
 
-    const onboardingCategory = await guild.channels.create({
-        name: '📋 入门指南',
-        type: ChannelType.GuildCategory,
+    const onboardingCategory = await findOrCreateCategory(guild, {
+        aliases: ['📋 Getting Started', '📋 入门指南'],
+        name: '📋 Getting Started',
         permissionOverwrites: [
             { id: guild.id, allow: [PermissionFlagsBits.ViewChannel] },
             {
@@ -282,152 +493,215 @@ async function runOneClickSetup(guild) {
                 ],
             },
         ],
-        reason: '总群机器人一键设置',
+        reason: setupReason,
     });
 
-    const rulesChannel = await guild.channels.create({
-        name: '规则',
-        type: ChannelType.GuildText,
-        parent: onboardingCategory.id,
-        topic: '服务器规则 — 新成员必读',
-        permissionOverwrites: [
-            {
-                id: guild.id,
-                allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory],
-                deny: [PermissionFlagsBits.SendMessages],
-            },
-            {
-                id: client.user.id,
-                allow: [
-                    PermissionFlagsBits.ViewChannel,
-                    PermissionFlagsBits.SendMessages,
-                    PermissionFlagsBits.ManageChannels,
-                ],
-            },
-        ],
-        reason: '总群机器人一键设置',
+    const rulesChannel = await findOrCreateTextChannel(guild, {
+        aliases: ['rules', '规则'],
+        name: 'rules',
+        parent: onboardingCategory,
+        topic: 'Server rules — required reading for all members',
+        permissionOverwrites: buildOnboardingReadOnlyPermissions(guild),
+        reason: setupReason,
     });
 
-    const verifyChannel = await guild.channels.create({
-        name: '验证',
-        type: ChannelType.GuildText,
-        parent: onboardingCategory.id,
-        topic: '完成验证以解锁全部频道',
-        permissionOverwrites: [
-            {
-                id: guild.id,
-                allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory],
-                deny: [PermissionFlagsBits.SendMessages],
-            },
-            {
-                id: client.user.id,
-                allow: [
-                    PermissionFlagsBits.ViewChannel,
-                    PermissionFlagsBits.SendMessages,
-                    PermissionFlagsBits.ManageChannels,
-                ],
-            },
-        ],
-        reason: '总群机器人一键设置',
+    const verifyChannel = await findOrCreateTextChannel(guild, {
+        aliases: ['verification', '验证'],
+        name: 'verification',
+        parent: onboardingCategory,
+        topic: 'Complete verification to unlock the server',
+        permissionOverwrites: buildOnboardingReadOnlyPermissions(guild),
+        reason: setupReason,
     });
 
-    const welcomeChannel = await guild.channels.create({
-        name: '欢迎',
-        type: ChannelType.GuildText,
-        parent: onboardingCategory.id,
-        topic: '新成员加入欢迎',
-        permissionOverwrites: [
-            {
-                id: guild.id,
-                allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory],
-                deny: [PermissionFlagsBits.SendMessages],
-            },
-            {
-                id: client.user.id,
-                allow: [
-                    PermissionFlagsBits.ViewChannel,
-                    PermissionFlagsBits.SendMessages,
-                    PermissionFlagsBits.ManageChannels,
-                ],
-            },
-        ],
-        reason: '总群机器人一键设置',
+    const welcomeChannel = await findOrCreateTextChannel(guild, {
+        aliases: ['welcome', '欢迎'],
+        name: 'welcome',
+        parent: onboardingCategory,
+        topic: 'New member welcome messages',
+        permissionOverwrites: buildOnboardingReadOnlyPermissions(guild),
+        reason: setupReason,
     });
 
-    const communityCategory = await guild.channels.create({
-        name: '💬 社区交流',
-        type: ChannelType.GuildCategory,
+    const serverInfoChannel = await findOrCreateTextChannel(guild, {
+        aliases: ['server-info', 'about', 'about-server'],
+        name: 'server-info',
+        parent: onboardingCategory,
+        topic: 'About the RED DMA main hub',
+        permissionOverwrites: buildOnboardingReadOnlyPermissions(guild),
+        reason: setupReason,
+    });
+
+    const communityCategory = await findOrCreateCategory(guild, {
+        aliases: ['💬 Community', '💬 社区交流'],
+        name: '💬 Community',
         permissionOverwrites: buildVerifiedOnlyPermissions(guild, verifiedRole.id),
-        reason: '总群机器人一键设置',
+        reason: setupReason,
     });
 
-    const announceChannel = await guild.channels.create({
-        name: '公告',
-        type: ChannelType.GuildText,
-        parent: communityCategory.id,
-        topic: '官方公告',
+    const announceChannel = await findOrCreateTextChannel(guild, {
+        aliases: ['announcements', '公告'],
+        name: 'announcements',
+        parent: communityCategory,
+        topic: 'Official announcements',
         permissionOverwrites: buildReadOnlyPermissions(guild, verifiedRole.id),
-        reason: '总群机器人一键设置',
+        reason: setupReason,
     });
 
-    const chatChannel = await guild.channels.create({
-        name: '综合聊天',
-        type: ChannelType.GuildText,
-        parent: communityCategory.id,
-        topic: '自由聊天',
+    const chatChannel = await findOrCreateTextChannel(guild, {
+        aliases: ['general-chat', '综合聊天', '常规'],
+        name: 'general-chat',
+        parent: communityCategory,
+        topic: 'General community chat',
         permissionOverwrites: buildPublicChannelPermissions(guild, verifiedRole.id),
-        reason: '总群机器人一键设置',
+        reason: setupReason,
     });
 
-    const supportCategory = await guild.channels.create({
-        name: '🛠️ 服务支持',
-        type: ChannelType.GuildCategory,
+    await cleanupDuplicateAliasChannels(
+        guild,
+        chatChannel,
+        ['综合聊天', '常规'],
+        'Removed duplicate chat channel after English setup'
+    );
+
+    const mediaChannel = await findOrCreateTextChannel(guild, {
+        aliases: ['media-share', 'media', 'screenshots'],
+        name: 'media-share',
+        parent: communityCategory,
+        topic: 'Share screenshots, clips, and media',
+        permissionOverwrites: buildPublicChannelPermissions(guild, verifiedRole.id),
+        reason: setupReason,
+    });
+
+    const suggestionsChannel = await findOrCreateTextChannel(guild, {
+        aliases: ['suggestions', 'feedback'],
+        name: 'suggestions',
+        parent: communityCategory,
+        topic: 'Community suggestions and feedback',
+        permissionOverwrites: buildPublicChannelPermissions(guild, verifiedRole.id),
+        reason: setupReason,
+    });
+
+    const supportCategory = await findOrCreateCategory(guild, {
+        aliases: ['🛠️ Support & Resources', '🛠️ 服务支持'],
+        name: '🛠️ Support & Resources',
         permissionOverwrites: buildVerifiedOnlyPermissions(guild, verifiedRole.id),
-        reason: '总群机器人一键设置',
+        reason: setupReason,
     });
 
-    const helpChannel = await guild.channels.create({
-        name: '帮助与支持',
-        type: ChannelType.GuildText,
-        parent: supportCategory.id,
-        topic: '有问题在这里提问',
+    const helpChannel = await findOrCreateTextChannel(guild, {
+        aliases: ['help-support', '帮助与支持', 'support'],
+        name: 'help-support',
+        parent: supportCategory,
+        topic: 'Ask questions and get community help',
         permissionOverwrites: buildPublicChannelPermissions(guild, verifiedRole.id),
-        reason: '总群机器人一键设置',
+        reason: setupReason,
     });
 
-    const websiteChannel = await guild.channels.create({
-        name: '官网与产品',
-        type: ChannelType.GuildText,
-        parent: supportCategory.id,
-        topic: '官网与产品信息',
+    const websiteChannel = await findOrCreateTextChannel(guild, {
+        aliases: ['website-products', '官网与产品', 'products'],
+        name: 'website-products',
+        parent: supportCategory,
+        topic: 'Official website and product overview',
         permissionOverwrites: buildReadOnlyPermissions(guild, verifiedRole.id),
-        reason: '总群机器人一键设置',
+        reason: setupReason,
+    });
+
+    const faqChannel = await findOrCreateTextChannel(guild, {
+        aliases: ['faq', 'questions'],
+        name: 'faq',
+        parent: supportCategory,
+        topic: 'Frequently asked questions',
+        permissionOverwrites: buildReadOnlyPermissions(guild, verifiedRole.id),
+        reason: setupReason,
+    });
+
+    const purchaseGuideChannel = await findOrCreateTextChannel(guild, {
+        aliases: ['purchase-guide', 'how-to-buy'],
+        name: 'purchase-guide',
+        parent: supportCategory,
+        topic: 'Step-by-step purchase instructions',
+        permissionOverwrites: buildReadOnlyPermissions(guild, verifiedRole.id),
+        reason: setupReason,
+    });
+
+    const storeCategory = await findOrCreateCategory(guild, {
+        aliases: ['🛒 Store & Orders', '🔗 Store & Orders'],
+        name: '🛒 Store & Orders',
+        permissionOverwrites: buildVerifiedOnlyPermissions(guild, verifiedRole.id),
+        reason: setupReason,
+    });
+
+    const salesChannel = await findOrCreateTextChannel(guild, {
+        aliases: ['sales-server', 'sales', 'store'],
+        name: 'sales-server',
+        parent: storeCategory,
+        topic: 'Link to the RED DMA Sales Server for orders and firmware status',
+        permissionOverwrites: buildReadOnlyPermissions(guild, verifiedRole.id),
+        reason: setupReason,
     });
 
     await publishRulesToChannel(rulesChannel);
     await publishVerifyToChannel(verifyChannel, rulesChannel);
 
+    await publishEmbedToChannel(serverInfoChannel, buildServerInfoEmbed(salesChannel), {
+        title: EMBED_TITLES.SERVER_INFO,
+    });
+
     const websiteEmbed = new EmbedBuilder()
-        .setTitle('🌐 官网与产品')
+        .setTitle(EMBED_TITLES.WEBSITE)
         .setDescription(
-            '**官方网站：** https://reddma.xyz\n\n' +
-                '浏览产品、了解详情请访问官网，或在销售频道使用 `/buy` 创建购买工单。'
+            '**Official Website:** https://reddma.xyz\n\n' +
+                'Browse products, compatibility info, and onboarding guides on the website.\n' +
+                'To purchase, join the Sales Server via #sales-server and open a ticket with `/buy`.'
         )
         .setColor(0xef4444);
 
-    await websiteChannel.send({ embeds: [websiteEmbed] });
+    await publishEmbedToChannel(websiteChannel, websiteEmbed, { title: EMBED_TITLES.WEBSITE });
 
     const announceEmbed = new EmbedBuilder()
-        .setTitle('📢 公告频道')
-        .setDescription('管理员将在此发布重要通知，请保持关注。')
+        .setTitle(EMBED_TITLES.ANNOUNCEMENTS)
+        .setDescription('Official RED DMA announcements will be posted here. Stay tuned for updates.')
         .setColor(0xef4444);
 
-    await announceChannel.send({ embeds: [announceEmbed] });
+    await publishEmbedToChannel(announceChannel, announceEmbed, { title: EMBED_TITLES.ANNOUNCEMENTS });
+
+    await publishEmbedToChannel(salesChannel, buildSalesHubEmbed(), {
+        title: EMBED_TITLES.SALES_HUB,
+        components: [buildSalesHubButtons()],
+    });
+
+    await publishEmbedToChannel(purchaseGuideChannel, buildPurchaseGuideEmbed(salesChannel), {
+        title: EMBED_TITLES.PURCHASE_GUIDE,
+    });
+
+    await publishEmbedToChannel(faqChannel, buildFaqEmbed(), { title: EMBED_TITLES.FAQ });
+
+    const suggestionsEmbed = new EmbedBuilder()
+        .setTitle(EMBED_TITLES.SUGGESTIONS)
+        .setDescription(
+            'Have ideas to improve the community or our products? Share them here.\n\n' +
+                'Please keep suggestions constructive. Staff may follow up in announcements.'
+        )
+        .setColor(0xa855f7);
+
+    await publishEmbedToChannel(suggestionsChannel, suggestionsEmbed, { title: EMBED_TITLES.SUGGESTIONS });
+
+    const mediaEmbed = new EmbedBuilder()
+        .setTitle(EMBED_TITLES.MEDIA)
+        .setDescription(
+            'Share gameplay clips, setup photos, and media related to RED DMA.\n\n' +
+                'Keep content appropriate and respect others\' privacy.'
+        )
+        .setColor(0x06b6d4);
+
+    await publishEmbedToChannel(mediaChannel, mediaEmbed, { title: EMBED_TITLES.MEDIA });
 
     saveGuildConfig(guild.id, {
         welcome_channel_id: welcomeChannel.id,
         rules_channel_id: rulesChannel.id,
         verify_channel_id: verifyChannel.id,
+        sales_channel_id: salesChannel.id,
         verified_role_id: verifiedRole.id,
         unverified_role_id: unverifiedRole.id,
         setup_complete: 1,
@@ -439,43 +713,69 @@ async function runOneClickSetup(guild) {
         rulesChannel,
         verifyChannel,
         welcomeChannel,
+        serverInfoChannel,
         announceChannel,
         chatChannel,
+        mediaChannel,
+        suggestionsChannel,
         helpChannel,
         websiteChannel,
+        faqChannel,
+        purchaseGuideChannel,
+        salesChannel,
     };
 }
 
 async function registerCommands() {
     const commands = [
         {
-            name: '一键设置',
-            description: '自动创建验证系统、规则频道和基础文字频道（管理员专用）',
+            name: 'setup',
+            description: 'Create roles, channels, permissions, and publish panels (admin only)',
         },
         {
-            name: '发布频道规则',
-            description: '在规则频道发布或更新服务器规则（管理员专用）',
+            name: 'publish-rules',
+            description: 'Publish or update server rules in the rules channel (admin only)',
         },
         {
-            name: '发布验证面板',
-            description: '在验证频道发布或更新验证按钮（管理员专用）',
+            name: 'publish-verify',
+            description: 'Publish or update the verification panel (admin only)',
         },
     ];
 
     const rest = new REST({ version: '10' }).setToken(TOKEN);
 
     try {
-        console.log('正在注册斜杠命令...');
+        console.log('Registering slash commands...');
         await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
-        console.log('✅ 斜杠命令注册成功');
+        console.log('Slash commands registered');
     } catch (error) {
-        console.error('注册命令失败:', error);
+        console.error('Failed to register commands:', error);
+    }
+}
+
+async function maybeAutoSetup() {
+    const guildId = AUTO_SETUP_GUILD_ID || process.argv[process.argv.indexOf('--setup') + 1];
+    if (!guildId) return;
+
+    const guild = await client.guilds.fetch(guildId).catch(() => null);
+    if (!guild) {
+        console.error(`Could not find guild ${guildId} for auto setup`);
+        return;
+    }
+
+    console.log(`Running setup for guild: ${guild.name} (${guild.id})`);
+    const result = await runOneClickSetup(guild);
+    console.log('Setup complete:', Object.keys(result).join(', '));
+
+    if (process.argv.includes('--setup')) {
+        setTimeout(() => process.exit(0), 1000);
     }
 }
 
 client.once(Events.ClientReady, async () => {
-    console.log(`✅ 总群机器人已上线: ${client.user.tag}`);
+    console.log(`RED DMA Main Bot online: ${client.user.tag}`);
     await registerCommands();
+    await maybeAutoSetup();
 });
 
 client.on(Events.GuildMemberAdd, async (member) => {
@@ -488,22 +788,25 @@ client.on(Events.GuildMemberAdd, async (member) => {
 
         const rulesChannel = member.guild.channels.cache.get(config.rules_channel_id);
         const verifyChannel = member.guild.channels.cache.get(config.verify_channel_id);
+        const salesChannel = config.sales_channel_id
+            ? member.guild.channels.cache.get(config.sales_channel_id)
+            : null;
 
         if (config.unverified_role_id) {
             const unverifiedRole = member.guild.roles.cache.get(config.unverified_role_id);
             if (unverifiedRole && !member.roles.cache.has(unverifiedRole.id)) {
-                await member.roles.add(unverifiedRole, '新成员加入');
+                await member.roles.add(unverifiedRole, 'New member joined');
             }
         }
 
-        const embed = buildWelcomeEmbed(member, rulesChannel, verifyChannel);
+        const embed = buildWelcomeEmbed(member, rulesChannel, verifyChannel, salesChannel);
         await welcomeChannel.send({
-            content: `${member} 欢迎加入！请先阅读规则并完成验证 👇`,
+            content: `${member} Welcome! Please read the rules and complete verification.`,
             embeds: [embed],
             allowedMentions: { users: [member.id] },
         });
     } catch (error) {
-        console.error('欢迎消息发送失败:', error);
+        console.error('Failed to send welcome message:', error);
     }
 });
 
@@ -513,7 +816,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             const config = getGuildConfig(interaction.guild.id);
             if (!config?.verified_role_id) {
                 await interaction.reply({
-                    content: '❌ 验证系统尚未配置，请联系管理员运行 `/一键设置`。',
+                    content: '❌ Verification is not configured yet. Ask an admin to run `/setup`.',
                     ephemeral: true,
                 });
                 return;
@@ -522,28 +825,33 @@ client.on(Events.InteractionCreate, async (interaction) => {
             const verifiedRole = interaction.guild.roles.cache.get(config.verified_role_id);
             if (!verifiedRole) {
                 await interaction.reply({
-                    content: '❌ 找不到「已验证」角色，请联系管理员重新运行 `/一键设置`。',
+                    content: '❌ The Verified role is missing. Ask an admin to run `/setup` again.',
                     ephemeral: true,
                 });
                 return;
             }
 
             if (interaction.member.roles.cache.has(verifiedRole.id)) {
-                await interaction.reply({ content: '✅ 你已经完成验证了！', ephemeral: true });
+                await interaction.reply({ content: '✅ You are already verified!', ephemeral: true });
                 return;
             }
 
-            await interaction.member.roles.add(verifiedRole, '完成账户验证');
+            await interaction.member.roles.add(verifiedRole, 'Account verification completed');
 
             if (config.unverified_role_id) {
                 const unverifiedRole = interaction.guild.roles.cache.get(config.unverified_role_id);
                 if (unverifiedRole && interaction.member.roles.cache.has(unverifiedRole.id)) {
-                    await interaction.member.roles.remove(unverifiedRole, '完成账户验证');
+                    await interaction.member.roles.remove(unverifiedRole, 'Account verification completed');
                 }
             }
 
+            const salesChannel = config.sales_channel_id
+                ? interaction.guild.channels.cache.get(config.sales_channel_id)
+                : null;
+            const salesMention = salesChannel ? ` Check out ${salesChannel} for purchases.` : '';
+
             await interaction.reply({
-                content: '🎉 验证成功！你现在可以浏览和参与社区的其他频道了。',
+                content: `🎉 Verification complete! You now have access to the community.${salesMention}`,
                 ephemeral: true,
             });
             return;
@@ -551,29 +859,34 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         if (!interaction.isChatInputCommand()) return;
 
-        if (interaction.commandName === '一键设置') {
+        if (interaction.commandName === 'setup') {
             if (!memberCanManage(interaction)) {
-                await interaction.reply({ content: '❌ 仅管理员可使用此命令。', ephemeral: true });
+                await interaction.reply({ content: '❌ Admin only.', ephemeral: true });
                 return;
             }
 
             await interaction.deferReply({ ephemeral: true });
-
             const result = await runOneClickSetup(interaction.guild);
 
             const summary = new EmbedBuilder()
-                .setTitle('✅ 一键设置完成')
+                .setTitle('✅ Setup Complete')
                 .setDescription(
-                    '已自动创建角色、频道和权限，并发布规则与验证面板。\n\n' +
-                        `**角色：** ${result.verifiedRole}、${result.unverifiedRole}\n` +
-                        `**规则频道：** ${result.rulesChannel}\n` +
-                        `**验证频道：** ${result.verifyChannel}\n` +
-                        `**欢迎频道：** ${result.welcomeChannel}\n` +
-                        `**公告频道：** ${result.announceChannel}\n` +
-                        `**综合聊天：** ${result.chatChannel}\n` +
-                        `**帮助与支持：** ${result.helpChannel}\n` +
-                        `**官网与产品：** ${result.websiteChannel}\n\n` +
-                        '**提示：** 请确保机器人角色位于「已验证」之上，新成员加入后会自动在欢迎频道收到提醒。'
+                    'Roles, channels, permissions, and panels are ready.\n\n' +
+                        `**Roles:** ${result.verifiedRole}, ${result.unverifiedRole}\n` +
+                        `**Rules:** ${result.rulesChannel}\n` +
+                        `**Verification:** ${result.verifyChannel}\n` +
+                        `**Welcome:** ${result.welcomeChannel}\n` +
+                        `**Server Info:** ${result.serverInfoChannel}\n` +
+                        `**Announcements:** ${result.announceChannel}\n` +
+                        `**General Chat:** ${result.chatChannel}\n` +
+                        `**Media:** ${result.mediaChannel}\n` +
+                        `**Suggestions:** ${result.suggestionsChannel}\n` +
+                        `**Help:** ${result.helpChannel}\n` +
+                        `**Website:** ${result.websiteChannel}\n` +
+                        `**FAQ:** ${result.faqChannel}\n` +
+                        `**Purchase Guide:** ${result.purchaseGuideChannel}\n` +
+                        `**Sales Server Link:** ${result.salesChannel}\n\n` +
+                        '**Tip:** Keep the bot role above **Verified**. New members are welcomed automatically.'
                 )
                 .setColor(0x22c55e);
 
@@ -581,9 +894,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
             return;
         }
 
-        if (interaction.commandName === '发布频道规则') {
+        if (interaction.commandName === 'publish-rules') {
             if (!memberCanManage(interaction)) {
-                await interaction.reply({ content: '❌ 仅管理员可使用此命令。', ephemeral: true });
+                await interaction.reply({ content: '❌ Admin only.', ephemeral: true });
                 return;
             }
 
@@ -595,7 +908,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
             if (!rulesChannel || rulesChannel.type !== ChannelType.GuildText) {
                 await interaction.reply({
-                    content: '❌ 找不到规则频道。请先运行 `/一键设置`，或在本频道手动发布。',
+                    content: '❌ Rules channel not found. Run `/setup` first or use a text channel.',
                     ephemeral: true,
                 });
                 return;
@@ -608,15 +921,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
             }
 
             await interaction.reply({
-                content: `✅ 规则已发布到 ${rulesChannel}`,
+                content: `✅ Rules published in ${rulesChannel}`,
                 ephemeral: true,
             });
             return;
         }
 
-        if (interaction.commandName === '发布验证面板') {
+        if (interaction.commandName === 'publish-verify') {
             if (!memberCanManage(interaction)) {
-                await interaction.reply({ content: '❌ 仅管理员可使用此命令。', ephemeral: true });
+                await interaction.reply({ content: '❌ Admin only.', ephemeral: true });
                 return;
             }
 
@@ -628,7 +941,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
             if (!verifyChannel || verifyChannel.type !== ChannelType.GuildText) {
                 await interaction.reply({
-                    content: '❌ 找不到验证频道。请先运行 `/一键设置`，或在本频道手动发布。',
+                    content: '❌ Verification channel not found. Run `/setup` first or use a text channel.',
                     ephemeral: true,
                 });
                 return;
@@ -645,14 +958,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
             }
 
             await interaction.reply({
-                content: `✅ 验证面板已发布到 ${verifyChannel}`,
+                content: `✅ Verification panel published in ${verifyChannel}`,
                 ephemeral: true,
             });
         }
     } catch (error) {
-        console.error('交互处理错误:', error);
+        console.error('Interaction error:', error);
         const payload = {
-            content: `❌ 操作失败：${error.message || '未知错误'}`,
+            content: `❌ Action failed: ${error.message || 'Unknown error'}`,
             ephemeral: true,
         };
         if (interaction.deferred || interaction.replied) {
@@ -664,17 +977,38 @@ client.on(Events.InteractionCreate, async (interaction) => {
 });
 
 if (!TOKEN || !CLIENT_ID) {
-    console.error('❌ 请在 .env 文件中设置 TOKEN 和 CLIENT_ID');
+    console.error('Missing TOKEN or CLIENT_ID. Set them in Railway Variables or a local .env file.');
+    process.exit(1);
+}
+
+if (!/^[A-Za-z0-9._-]{50,}$/.test(TOKEN)) {
+    console.error('Invalid TOKEN format. Copy the full Bot Token from Discord Developer Portal → Bot.');
+    process.exit(1);
+}
+
+if (!/^\d{17,20}$/.test(CLIENT_ID)) {
+    console.error('Invalid CLIENT_ID format. Use the Application ID from General Information.');
     process.exit(1);
 }
 
 const http = require('http');
 const PORT = process.env.PORT || 3000;
-http.createServer((_req, res) => {
-    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end('RED DMA Main Bot is running');
-}).listen(PORT, () => {
-    console.log(`健康检查端口: ${PORT}`);
-});
+http
+    .createServer((_req, res) => {
+        res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('RED DMA Main Bot is running');
+    })
+    .listen(PORT, () => {
+        console.log(`Health check port: ${PORT}`);
+    });
 
-client.login(TOKEN).catch((err) => console.error('登录失败:', err));
+client.login(TOKEN).catch((err) => {
+    console.error('Login failed:', err);
+    if (err.code === 'TokenInvalid') {
+        console.error(
+            'Discord rejected the TOKEN. Reset it at https://discord.com/developers/applications, ' +
+                'update Railway Variables (no quotes, no "Bot " prefix), then redeploy.'
+        );
+    }
+    process.exit(1);
+});
