@@ -1,7 +1,7 @@
 {
   "name": "reddma-main-bot",
   "version": "1.0.0",
-  "description": "RED DMA Main Server Bot - Verification, Rules & Welcome",
+  "description": "RED community hub bot - verification, rules, welcome DMs, member stats, luxury store setup",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
