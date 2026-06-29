@@ -55,9 +55,19 @@ const EMBED_TITLES = {
     MEMBER_STATS: '📊 Live Member Stats',
     LUXURY_SNEAKERS: '👟 Premium Sneaker Catalog',
     LUXURY_WATCHES: '⌚ Luxury Watch Catalog',
-    LUXURY_ORDER: '🧾 Open an Order Ticket',
+    LUXURY_ORDER: '🧾 Order Center',
+    LUXURY_PROCUREMENT: '✨ Free Procurement — 自由采购',
     LUXURY_PAYMENT: '💳 Payment & Shipping',
-    LUXURY_STORE_RULES: '📋 Store Policies',
+    LUXURY_STORE_RULES: '📋 Rules & How to Order',
+};
+
+const JOIN_PING_DELETE_MS = 3000;
+
+const LUXURY_TICKET_CATEGORIES = {
+    luxury_ticket_sneakers: 'Sneakers',
+    luxury_ticket_watches: 'Watches',
+    luxury_ticket_mixed: 'Mixed Order',
+    luxury_ticket_procurement: 'Free Procurement',
 };
 
 const LUXURY_SNEAKER_LINES = [
@@ -76,7 +86,55 @@ const LUXURY_WATCH_LINES = [
     { id: 'other-watch', label: 'Other Models', note: 'Richard Mille, Hublot, bespoke builds' },
 ];
 
+const LUXURY_PROCUREMENT_LINES = [
+    { label: 'Bags & Leather', note: 'LV, Chanel, Gucci, Hermès style' },
+    { label: 'Apparel', note: 'Streetwear, designer jackets, hoodies' },
+    { label: 'Accessories', note: 'Belts, sunglasses, jewelry, scarves' },
+    { label: 'Electronics', note: 'Earbuds, gadgets — sourced on request' },
+    { label: 'Custom Requests', note: 'Send photos or links — we will try to source it' },
+];
+
 const memberCountCooldowns = new Map();
+
+function catalogLinesToFields(lines) {
+    return lines.map((item) => ({
+        name: item.label,
+        value: item.note,
+        inline: true,
+    }));
+}
+
+function getLuxuryInvoicePrompts(category) {
+    const prompts = {
+        Sneakers:
+            '• Product model / reference photos\n' +
+            '• Size (US / EU)\n' +
+            '• Quantity\n' +
+            '• Shipping country & city\n' +
+            '• Preferred payment method',
+        Watches:
+            '• Model / reference photos\n' +
+            '• Wrist size (mm) & band preference\n' +
+            '• Movement preference (if any)\n' +
+            '• Shipping country & city\n' +
+            '• Preferred payment method',
+        'Mixed Order':
+            '• List all items (sneakers + watches)\n' +
+            '• Sizes for each item\n' +
+            '• Reference photos or links\n' +
+            '• Shipping country & city\n' +
+            '• Preferred payment method',
+        'Free Procurement':
+            '• **Item name & description** (what you want to buy)\n' +
+            '• Reference photos, screenshots, or purchase links\n' +
+            '• Specs — size, color, quantity\n' +
+            '• Budget range (optional)\n' +
+            '• Shipping country & city\n' +
+            '• Preferred payment method',
+    };
+
+    return prompts[category] ?? prompts['Free Procurement'];
+}
 
 const client = new Client({
     intents: [
@@ -281,22 +339,23 @@ function buildHubRulesDmEmbed(member, rulesChannel, verifyChannel) {
         .setTimestamp();
 }
 
-function buildStoreRulesDmEmbed(member, orderChannel) {
+function buildStoreRulesDmEmbed(member, { orderChannel, rulesChannel, procurementChannel } = {}) {
+    const rulesMention = rulesChannel ? `${rulesChannel}` : '#store-rules';
     const orderMention = orderChannel ? `${orderChannel}` : '#order-here';
+    const procurementMention = procurementChannel ? `${procurementChannel}` : '#custom-procurement';
 
     return new EmbedBuilder()
         .setTitle('👋 Welcome!')
         .setDescription(
             `Hi **${member.user.username}**, welcome to **${member.guild.name}**!\n\n` +
-                '**Before you order:**\n' +
-                '• All sales go through official tickets — no DM deals\n' +
-                '• QC approval is required before we ship\n' +
-                '• No refunds after dispatch unless a defect is confirmed\n' +
-                '• Chargebacks result in a permanent ban\n' +
-                '• Be respectful to staff at all times\n\n' +
-                `🧾 **Place orders:** ${orderMention}\n` +
-                '💬 **Casual chat:** #general-chat\n\n' +
-                'Reply in your ticket with model, size, and shipping country to get started.\n\n' +
+                `📋 **Start here:** ${rulesMention}\n` +
+                'Full guide on **how to purchase and place orders** — please read before buying.\n\n' +
+                '**Quick steps:**\n' +
+                `1. Go to ${orderMention} or ${procurementMention}\n` +
+                '2. Open a ticket (Sneakers / Watches / Mixed / Free Procurement)\n' +
+                '3. Reply in your private ticket with item details & shipping info\n' +
+                '4. Staff sends quote, QC & payment → tracking after dispatch\n\n' +
+                '💬 **Chat:** #general-chat\n\n' +
                 '_This message is only visible to you._'
         )
         .setColor(0x8b5cf6)
@@ -305,31 +364,123 @@ function buildStoreRulesDmEmbed(member, orderChannel) {
         .setTimestamp();
 }
 
-async function sendJoinDirectMessage(member, config) {
-    try {
-        if (config.setup_complete) {
-            const rulesChannel = member.guild.channels.cache.get(config.rules_channel_id);
-            const verifyChannel = member.guild.channels.cache.get(config.verify_channel_id);
-            await member.send({
-                embeds: [buildHubRulesDmEmbed(member, rulesChannel, verifyChannel)],
-            });
-            return;
-        }
+async function getLuxuryStoreRulesChannel(guild, config) {
+    if (config?.luxury_store_rules_channel_id) {
+        const cached = guild.channels.cache.get(config.luxury_store_rules_channel_id);
+        if (cached) return cached;
+    }
+    return findChannelByNames(guild, ['store-rules', 'luxury-rules', 'rules']);
+}
 
-        if (config.luxury_store_complete) {
-            const orderChannel = config.luxury_order_channel_id
-                ? member.guild.channels.cache.get(config.luxury_order_channel_id)
-                : null;
-            await member.send({
-                embeds: [buildStoreRulesDmEmbed(member, orderChannel)],
-            });
-        }
+async function sendJoinRulesPing(member, config) {
+    if (!config?.luxury_store_complete) return;
+
+    const generalChat = config.general_chat_channel_id
+        ? member.guild.channels.cache.get(config.general_chat_channel_id)
+        : null;
+    const rulesChannel = await getLuxuryStoreRulesChannel(member.guild, config);
+    const targetChannel = generalChat ?? rulesChannel;
+    if (!targetChannel) return;
+
+    const rulesMention = rulesChannel ? `${rulesChannel}` : '#store-rules';
+
+    try {
+        const pingMessage = await targetChannel.send({
+            content:
+                `${member} 👋 Welcome! Please read ${rulesMention} — it explains **how to purchase and place orders**.\n` +
+                '欢迎加入！请先查看规则频道了解采购与下单流程。',
+            allowedMentions: { users: [member.id] },
+        });
+        setTimeout(() => pingMessage.delete().catch(() => {}), JOIN_PING_DELETE_MS);
+        console.log(
+            `Join ping sent to ${member.user.tag} in #${targetChannel.name} (auto-delete in ${JOIN_PING_DELETE_MS}ms)`
+        );
+    } catch (error) {
+        console.warn(`Could not send join ping for ${member.user.tag}:`, error.message);
+    }
+}
+
+async function sendJoinDirectMessage(member, config) {
+    let embed;
+    if (config.setup_complete) {
+        const rulesChannel = member.guild.channels.cache.get(config.rules_channel_id);
+        const verifyChannel = member.guild.channels.cache.get(config.verify_channel_id);
+        embed = buildHubRulesDmEmbed(member, rulesChannel, verifyChannel);
+    } else if (config.luxury_store_complete) {
+        const orderChannel = config.luxury_order_channel_id
+            ? member.guild.channels.cache.get(config.luxury_order_channel_id)
+            : null;
+        const rulesChannel = config.luxury_store_rules_channel_id
+            ? member.guild.channels.cache.get(config.luxury_store_rules_channel_id)
+            : null;
+        const procurementChannel = config.luxury_procurement_channel_id
+            ? member.guild.channels.cache.get(config.luxury_procurement_channel_id)
+            : null;
+        embed = buildStoreRulesDmEmbed(member, { orderChannel, rulesChannel, procurementChannel });
+    } else {
+        return false;
+    }
+
+    try {
+        const dmTarget = member.partial ? await member.fetch() : member;
+        await dmTarget.send({ embeds: [embed] });
+        console.log(`DM sent to ${dmTarget.user.tag} in ${member.guild.name} (${member.guild.id})`);
+        return true;
     } catch (error) {
         if (error.code === 50007) {
-            console.log(`Could not DM ${member.user.tag} — DMs disabled`);
-            return;
+            console.warn(
+                `Could not DM ${member.user.tag} in ${member.guild.name} — user has DMs disabled or blocked the bot`
+            );
+            return false;
         }
-        console.error('Failed to send rules DM:', error);
+        console.error(`Failed to send rules DM to ${member.user.tag}:`, error);
+        return false;
+    }
+}
+
+async function sendJoinWelcomeFallback(member, config) {
+    if (config.setup_complete && config.welcome_channel_id) {
+        const welcomeChannel = member.guild.channels.cache.get(config.welcome_channel_id);
+        if (!welcomeChannel) return;
+
+        const rulesChannel = member.guild.channels.cache.get(config.rules_channel_id);
+        const verifyChannel = member.guild.channels.cache.get(config.verify_channel_id);
+        const embed = buildHubRulesDmEmbed(member, rulesChannel, verifyChannel);
+        await welcomeChannel.send({
+            content: `${member} Welcome! We could not DM you — please read the rules and complete verification here.`,
+            embeds: [embed],
+            allowedMentions: { users: [member.id] },
+        });
+        console.log(`Welcome fallback posted for ${member.user.tag} in #${welcomeChannel.name}`);
+        return;
+    }
+
+    if (config.luxury_store_complete) {
+        const rulesChannel = await getLuxuryStoreRulesChannel(member.guild, config);
+        const rulesMention = rulesChannel ? `${rulesChannel}` : '#store-rules';
+        const generalChat = config.general_chat_channel_id
+            ? member.guild.channels.cache.get(config.general_chat_channel_id)
+            : null;
+        const targetChannel = generalChat ?? rulesChannel;
+        if (!targetChannel) return;
+
+        const embed = buildStoreRulesDmEmbed(member, {
+            orderChannel: config.luxury_order_channel_id
+                ? member.guild.channels.cache.get(config.luxury_order_channel_id)
+                : null,
+            rulesChannel,
+            procurementChannel: config.luxury_procurement_channel_id
+                ? member.guild.channels.cache.get(config.luxury_procurement_channel_id)
+                : null,
+        });
+
+        await targetChannel.send({
+            content:
+                `${member} Welcome! We could not DM you — please read ${rulesMention} for how to purchase and order.`,
+            embeds: [embed],
+            allowedMentions: { users: [member.id] },
+        });
+        console.log(`Welcome fallback posted for ${member.user.tag} in #${targetChannel.name}`);
     }
 }
 
@@ -360,7 +511,7 @@ function buildServerInfoEmbed(salesChannel, sneakerChannel) {
                 '• Share feedback and suggestions\n\n' +
                 '**Specialized servers**\n' +
                 `• ${salesMention} — RED DMA firmware, tickets & live status\n` +
-                `• ${sneakerMention} — Premium sneakers & luxury watches store\n\n` +
+                `• ${sneakerMention} — Sneakers, watches & free procurement store\n\n` +
                 '**Website:** https://reddma.xyz'
         )
         .setColor(0xef4444)
@@ -387,14 +538,29 @@ function buildSalesHubEmbed() {
 function buildSneakerHubEmbed() {
     return new EmbedBuilder()
         .setTitle(EMBED_TITLES.SNEAKER_HUB)
-        .setDescription(
-            '**RED Sneaker & Watch** — premium replica sneakers and luxury watches.\n\n' +
-                '**In the dedicated store server:**\n' +
-                '• Full sneaker & watch catalogs\n' +
-                '• QC galleries before shipping\n' +
-                '• Private invoice ticket system\n' +
-                '• Payment & shipping guides\n\n' +
-                'Click **Join Sneaker & Watch Server** below to browse and order.'
+        .setDescription('**RED Sneaker & Watch** — premium replica sneakers, luxury watches, and free procurement.')
+        .addFields(
+            {
+                name: '👟 Sneakers',
+                value: 'Jordan, Dunk, Yeezy, NB & more — QC before shipping',
+                inline: true,
+            },
+            {
+                name: '⌚ Watches',
+                value: 'Rolex, AP, Patek, Cartier style — movement options',
+                inline: true,
+            },
+            {
+                name: '✨ Free Procurement',
+                value: 'Bags, apparel, accessories — submit anything you want to buy',
+                inline: true,
+            },
+            {
+                name: '🧾 How to order',
+                value:
+                    'Join the store server → open a ticket in **#order-here** or **#custom-procurement** → share item details → receive invoice & QC',
+                inline: false,
+            }
         )
         .setColor(0x8b5cf6)
         .setFooter({ text: 'Official invite • RED Sneaker & Watch' });
@@ -500,6 +666,8 @@ async function cleanupLuxuryStoreFromGuild(guild) {
         luxury_order_channel_id: null,
         luxury_sneaker_catalog_id: null,
         luxury_watch_catalog_id: null,
+        luxury_procurement_channel_id: null,
+        luxury_store_rules_channel_id: null,
     });
 }
 
@@ -751,100 +919,218 @@ function buildLuxuryTicketPermissions(guild, userId, staffRoleId) {
 }
 
 function buildLuxurySneakerEmbed() {
-    const lines = LUXURY_SNEAKER_LINES.map((item) => `**${item.label}** — ${item.note}`).join('\n');
-
     return new EmbedBuilder()
         .setTitle(EMBED_TITLES.LUXURY_SNEAKERS)
-        .setDescription(
-            'Premium replica sneakers — curated batches, QC photos before shipping, and tracked delivery.\n\n' +
-                lines +
-                '\n\nClick **Order Sneakers** below to open a private invoice ticket with our sales team.'
-        )
+        .setDescription('Premium replica sneakers — curated batches, QC before shipping, tracked delivery.')
+        .addFields(catalogLinesToFields(LUXURY_SNEAKER_LINES))
         .setColor(0xf97316)
-        .setFooter({ text: 'QC provided • Secure checkout • Worldwide shipping' });
+        .setFooter({ text: 'Click Order Sneakers below • QC provided • Worldwide shipping' });
 }
 
 function buildLuxuryWatchEmbed() {
-    const lines = LUXURY_WATCH_LINES.map((item) => `**${item.label}** — ${item.note}`).join('\n');
-
     return new EmbedBuilder()
         .setTitle(EMBED_TITLES.LUXURY_WATCHES)
-        .setDescription(
-            'High-end replica watches — detailed finishing, correct weight, and movement options on request.\n\n' +
-                lines +
-                '\n\nClick **Order Watches** below to open a private invoice ticket with our sales team.'
-        )
+        .setDescription('High-end replica watches — detailed finishing, movement options on request.')
+        .addFields(catalogLinesToFields(LUXURY_WATCH_LINES))
         .setColor(0xeab308)
-        .setFooter({ text: 'QC video available • Warranty options • Insured shipping' });
+        .setFooter({ text: 'Click Order Watches below • QC video • Insured shipping' });
 }
 
-function buildLuxuryOrderPanelEmbed(orderChannel) {
-    const mention = orderChannel ? `${orderChannel}` : '#order-here';
+function buildLuxuryProcurementEmbed() {
+    return new EmbedBuilder()
+        .setTitle(EMBED_TITLES.LUXURY_PROCUREMENT)
+        .setDescription(
+            '**Not limited to sneakers or watches.** Tell us what you want — we source it for you.\n\n' +
+                'Bags, clothes, accessories, electronics, or anything else. Submit photos, links, or a description in your private ticket.'
+        )
+        .addFields(catalogLinesToFields(LUXURY_PROCUREMENT_LINES))
+        .addFields({
+            name: '📝 What to include in your ticket',
+            value:
+                'Item name • Reference photos / links • Size / color / quantity • Budget (optional) • Shipping country',
+            inline: false,
+        })
+        .setColor(0xa855f7)
+        .setFooter({ text: 'Click Open Procurement Ticket below • Staff will confirm availability & pricing' });
+}
+
+function buildLuxuryOrderPanelEmbed(orderChannel, procurementChannel) {
+    const orderMention = orderChannel ? `${orderChannel}` : '#order-here';
+    const procurementMention = procurementChannel ? `${procurementChannel}` : '#custom-procurement';
 
     return new EmbedBuilder()
         .setTitle(EMBED_TITLES.LUXURY_ORDER)
-        .setDescription(
-            '**How ordering works**\n' +
-                '1. Choose sneakers, watches, or a mixed order\n' +
-                '2. A private ticket opens with your invoice number\n' +
-                '3. Share model, size, budget, and shipping country\n' +
-                '4. Receive QC photos and payment instructions\n' +
-                '5. Tracking shared after dispatch\n\n' +
-                `Need help first? Read ${mention} and #payment-shipping before opening a ticket.`
+        .setDescription('Choose a ticket type below. A **private invoice channel** opens for you and sales staff.')
+        .addFields(
+            {
+                name: '👟 Sneakers',
+                value: 'Jordan, Dunk, Yeezy, NB & more',
+                inline: true,
+            },
+            {
+                name: '⌚ Watches',
+                value: 'Rolex, AP, Patek, Cartier style',
+                inline: true,
+            },
+            {
+                name: '🧾 Mixed Order',
+                value: 'Sneakers + watches in one invoice',
+                inline: true,
+            },
+            {
+                name: '✨ Free Procurement 自由采购',
+                value: `Anything else — use ${procurementMention} or the button below`,
+                inline: true,
+            },
+            {
+                name: '📋 How it works',
+                value:
+                    '**1.** Pick a ticket type\n' +
+                    '**2.** Private channel opens with invoice #\n' +
+                    '**3.** Reply with item details & shipping info\n' +
+                    '**4.** Receive quote, QC photos & payment link\n' +
+                    '**5.** Tracking after dispatch',
+                inline: false,
+            }
         )
-        .setColor(0x22c55e);
+        .setColor(0x22c55e)
+        .setFooter({ text: `Read #payment-shipping & #store-rules first • Sneakers/watches also in their catalogs` });
 }
 
 function buildLuxuryPaymentEmbed() {
     return new EmbedBuilder()
         .setTitle(EMBED_TITLES.LUXURY_PAYMENT)
-        .setDescription(
-            '**Payment methods** (confirmed in your ticket)\n' +
-                '• Crypto (USDT / BTC / ETH)\n' +
-                '• PayPal (Friends & Family where available)\n' +
-                '• Bank transfer (select regions)\n\n' +
-                '**Shipping**\n' +
-                '• Standard: 7–14 business days\n' +
-                '• Express: 4–7 business days (extra fee)\n' +
-                '• Double-boxed, discreet packaging\n' +
-                '• Tracking provided after dispatch\n\n' +
-                '**Invoice includes:** item list, unit price, shipping, total due, and payment deadline.'
+        .setDescription('Payment and shipping details are confirmed in your private ticket.')
+        .addFields(
+            {
+                name: '💰 Payment Methods',
+                value:
+                    '• Crypto — USDT / BTC / ETH\n' +
+                    '• PayPal — Friends & Family (where available)\n' +
+                    '• Bank transfer — select regions',
+                inline: true,
+            },
+            {
+                name: '📦 Shipping',
+                value:
+                    '• Standard — 7–14 business days\n' +
+                    '• Express — 4–7 days (extra fee)\n' +
+                    '• Double-boxed, discreet packaging\n' +
+                    '• Tracking after dispatch',
+                inline: true,
+            },
+            {
+                name: '🧾 Your Invoice Includes',
+                value: 'Item list • Unit price • Shipping • Total due • Payment deadline',
+                inline: false,
+            }
         )
         .setColor(0x3b82f6);
 }
 
-function buildLuxuryStoreRulesEmbed() {
+function buildLuxuryStoreRulesEmbed(channels = {}) {
+    const orderMention = channels.orderChannel ? `${channels.orderChannel}` : '#order-here';
+    const procurementMention = channels.procurementChannel
+        ? `${channels.procurementChannel}`
+        : '#custom-procurement';
+    const paymentMention = channels.paymentChannel ? `${channels.paymentChannel}` : '#payment-shipping';
+    const sneakerMention = channels.sneakerCatalog ? `${channels.sneakerCatalog}` : '#sneaker-catalog';
+    const watchMention = channels.watchCatalog ? `${channels.watchCatalog}` : '#watch-catalog';
+
     return new EmbedBuilder()
         .setTitle(EMBED_TITLES.LUXURY_STORE_RULES)
         .setDescription(
-            '**Store policies**\n' +
-                '• All sales go through official tickets — no DM deals\n' +
-                '• QC approval is required before we ship\n' +
-                '• No refunds after dispatch unless defect is confirmed\n' +
-                '• Chargebacks result in permanent ban\n' +
-                '• Respect staff — abusive behavior closes your ticket\n\n' +
-                '**Disclaimer:** Replica products are sold for collection/display purposes. You are responsible for compliance with local laws.'
+            '**Welcome to RED Sneaker & Watch!** Read this before you buy.\n' +
+                '欢迎来到本店！**采购与下单前请先阅读本规则。**'
         )
-        .setColor(0xef4444);
+        .addFields(
+            {
+                name: '🛒 How to Purchase & Place an Order',
+                value:
+                    `**1.** Go to ${orderMention} or ${procurementMention}\n` +
+                    '**2.** Click a ticket button:\n' +
+                    '　• 👟 **Sneakers** — replica sneakers\n' +
+                    '　• ⌚ **Watches** — luxury watches\n' +
+                    '　• 🧾 **Mixed Order** — sneakers + watches together\n' +
+                    '　• ✨ **Free Procurement** — anything else (bags, clothes, accessories…)\n' +
+                    '**3.** A **private ticket** opens — reply with:\n' +
+                    '　• Item model / photos / links\n' +
+                    '　• Size, color, quantity\n' +
+                    '　• Shipping country & city\n' +
+                    '**4.** Staff sends quote → QC photos → payment instructions\n' +
+                    '**5.** Approve QC → pay → tracking after dispatch\n\n' +
+                    `💳 Payment & shipping info: ${paymentMention}`,
+                inline: false,
+            },
+            {
+                name: '👟 Sneakers',
+                value: `Catalog: ${sneakerMention}\nClick **Order Sneakers** to open a ticket`,
+                inline: true,
+            },
+            {
+                name: '⌚ Watches',
+                value: `Catalog: ${watchMention}\nClick **Order Watches** to open a ticket`,
+                inline: true,
+            },
+            {
+                name: '✨ Free Procurement 自由采购',
+                value: `Channel: ${procurementMention}\nSubmit anything you want — not limited to shoes or watches`,
+                inline: true,
+            },
+            {
+                name: '📌 Store Policies',
+                value:
+                    '• All sales through official tickets — **no DM deals**\n' +
+                    '• QC approval required before shipping\n' +
+                    '• No refunds after dispatch unless defect confirmed\n' +
+                    '• Chargebacks = permanent ban\n' +
+                    '• Respect staff — abusive behavior closes your ticket',
+                inline: false,
+            },
+            {
+                name: '⚠️ Disclaimer',
+                value: 'Replica products are for collection/display. You are responsible for compliance with local laws.',
+                inline: false,
+            }
+        )
+        .setColor(0xef4444)
+        .setFooter({ text: 'New members: read this channel first before ordering • RED Sneaker & Watch' });
 }
 
-function buildLuxuryTicketButtons() {
-    return new ActionRowBuilder().addComponents(
+function buildLuxuryTicketButtonRows() {
+    const categoryRow = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
             .setCustomId('luxury_ticket_sneakers')
-            .setLabel('Order Sneakers')
+            .setLabel('Sneakers')
             .setStyle(ButtonStyle.Primary)
             .setEmoji('👟'),
         new ButtonBuilder()
             .setCustomId('luxury_ticket_watches')
-            .setLabel('Order Watches')
+            .setLabel('Watches')
             .setStyle(ButtonStyle.Primary)
             .setEmoji('⌚'),
         new ButtonBuilder()
             .setCustomId('luxury_ticket_mixed')
-            .setLabel('Mixed / Custom Order')
+            .setLabel('Mixed Order')
             .setStyle(ButtonStyle.Success)
-            .setEmoji('🧾')
+            .setEmoji('🧾'),
+        new ButtonBuilder()
+            .setCustomId('luxury_ticket_procurement')
+            .setLabel('Free Procurement')
+            .setStyle(ButtonStyle.Success)
+            .setEmoji('✨')
+    );
+
+    return [categoryRow];
+}
+
+function buildLuxuryProcurementButtonRow() {
+    return new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+            .setCustomId('luxury_ticket_procurement')
+            .setLabel('Open Procurement Ticket')
+            .setStyle(ButtonStyle.Success)
+            .setEmoji('✨')
     );
 }
 
@@ -866,24 +1152,31 @@ function buildLuxuryCatalogButtons(type) {
 }
 
 function buildLuxuryInvoiceEmbed({ ticketNumber, user, category, channel }) {
+    const categoryEmoji =
+        category === 'Sneakers'
+            ? '👟'
+            : category === 'Watches'
+              ? '⌚'
+              : category === 'Mixed Order'
+                ? '🧾'
+                : '✨';
+
     return new EmbedBuilder()
-        .setTitle(`Invoice #${ticketNumber}`)
-        .setDescription(
-            `**Customer:** ${user}\n` +
-                `**Category:** ${category}\n` +
-                `**Status:** Open — awaiting details\n` +
-                `**Ticket:** ${channel}\n\n` +
-                '**Please reply with:**\n' +
-                '• Product model / reference photos\n' +
-                '• Size (US/EU) or wrist size (mm)\n' +
-                '• Quantity\n' +
-                '• Shipping country & city\n' +
-                '• Preferred payment method\n\n' +
-                'A sales agent will confirm pricing and send your final invoice shortly.'
+        .setTitle(`${categoryEmoji} Invoice #${ticketNumber}`)
+        .setDescription(`**${category}** ticket — awaiting your order details.`)
+        .addFields(
+            { name: 'Customer', value: `${user}`, inline: true },
+            { name: 'Status', value: 'Open — awaiting details', inline: true },
+            { name: 'Ticket', value: `${channel}`, inline: true },
+            {
+                name: 'Please reply with',
+                value: getLuxuryInvoicePrompts(category),
+                inline: false,
+            }
         )
-        .setColor(0x10b981)
+        .setColor(category === 'Free Procurement' ? 0xa855f7 : 0x10b981)
         .setTimestamp()
-        .setFooter({ text: 'Luxury Store • Official Order Ticket' });
+        .setFooter({ text: 'RED Sneaker & Watch • Official Order Ticket' });
 }
 
 async function findOrCreateVoiceChannel(guild, { aliases, name, parent, permissionOverwrites, reason }) {
@@ -1112,7 +1405,10 @@ async function runLuxuryStoreSetup(guild) {
 
     const chatIntroEmbed = new EmbedBuilder()
         .setTitle('💬 General Chat')
-        .setDescription('Casual conversation — introduce yourself and chat with the community.')
+        .setDescription(
+            'Casual conversation — introduce yourself and chat with the community.\n\n' +
+                '📋 **New here?** Read **#store-rules** first — it explains how to purchase and place orders.'
+        )
         .setColor(0x3b82f6);
 
     await publishEmbedToChannel(generalChat, chatIntroEmbed, { title: '💬 General Chat' });
@@ -1244,6 +1540,17 @@ async function runLuxuryStoreSetup(guild) {
         reason: setupReason,
     });
 
+    const procurementChannel = await findOrCreateTextChannel(guild, {
+        aliases: ['custom-procurement', 'free-procurement', 'procurement', '自由采购'],
+        name: 'custom-procurement',
+        parent: ordersCategory,
+        topic: 'Free procurement — order anything beyond sneakers & watches',
+        permissionOverwrites: verifiedRoleId
+            ? buildReadOnlyPermissions(guild, verifiedRoleId)
+            : buildOnboardingReadOnlyPermissions(guild),
+        reason: setupReason,
+    });
+
     const paymentShipping = await findOrCreateTextChannel(guild, {
         aliases: ['payment-shipping', 'payment-methods'],
         name: 'payment-shipping',
@@ -1266,52 +1573,24 @@ async function runLuxuryStoreSetup(guild) {
         reason: setupReason,
     });
 
-    await publishEmbedToChannel(sneakerCatalog, buildLuxurySneakerEmbed(), {
-        title: EMBED_TITLES.LUXURY_SNEAKERS,
-        components: [buildLuxuryCatalogButtons('sneakers')],
+    await publishLuxuryStorePanels(guild, {
+        sneakerCatalog,
+        watchCatalog,
+        orderHere,
+        procurementChannel,
+        paymentShipping,
+        storeRules,
+        sneakerQc,
+        watchQc,
     });
-
-    await publishEmbedToChannel(watchCatalog, buildLuxuryWatchEmbed(), {
-        title: EMBED_TITLES.LUXURY_WATCHES,
-        components: [buildLuxuryCatalogButtons('watches')],
-    });
-
-    await publishEmbedToChannel(orderHere, buildLuxuryOrderPanelEmbed(orderHere), {
-        title: EMBED_TITLES.LUXURY_ORDER,
-        components: [buildLuxuryTicketButtons()],
-    });
-
-    await publishEmbedToChannel(paymentShipping, buildLuxuryPaymentEmbed(), {
-        title: EMBED_TITLES.LUXURY_PAYMENT,
-    });
-
-    await publishEmbedToChannel(storeRules, buildLuxuryStoreRulesEmbed(), {
-        title: EMBED_TITLES.LUXURY_STORE_RULES,
-    });
-
-    const qcSneakerEmbed = new EmbedBuilder()
-        .setTitle('👟 Sneaker QC Gallery')
-        .setDescription(
-            'Staff posts pre-shipment QC photos and videos here.\nCustomers: reply in your private ticket if you need extra angles.'
-        )
-        .setColor(0xf97316);
-
-    await publishEmbedToChannel(sneakerQc, qcSneakerEmbed, { title: '👟 Sneaker QC Gallery' });
-
-    const qcWatchEmbed = new EmbedBuilder()
-        .setTitle('⌚ Watch QC Gallery')
-        .setDescription(
-            'Staff posts macro shots, movement checks, and wrist fit references here.\nCustomers: approve QC in your ticket before we ship.'
-        )
-        .setColor(0xeab308);
-
-    await publishEmbedToChannel(watchQc, qcWatchEmbed, { title: '⌚ Watch QC Gallery' });
 
     saveGuildConfig(guild.id, {
         luxury_store_complete: 1,
         luxury_staff_role_id: staffRole.id,
         luxury_ticket_category_id: ticketCategory.id,
         luxury_order_channel_id: orderHere.id,
+        luxury_procurement_channel_id: procurementChannel.id,
+        luxury_store_rules_channel_id: storeRules.id,
         luxury_sneaker_catalog_id: sneakerCatalog.id,
         luxury_watch_catalog_id: watchCatalog.id,
         general_chat_channel_id: generalChat.id,
@@ -1332,9 +1611,160 @@ async function runLuxuryStoreSetup(guild) {
         ordersCategory,
         ticketCategory,
         orderHere,
+        procurementChannel,
         paymentShipping,
         storeRules,
     };
+}
+
+async function publishLuxuryStorePanels(guild, channels) {
+    const {
+        sneakerCatalog,
+        watchCatalog,
+        orderHere,
+        procurementChannel,
+        paymentShipping,
+        storeRules,
+        sneakerQc,
+        watchQc,
+    } = channels;
+
+    await publishEmbedToChannel(sneakerCatalog, buildLuxurySneakerEmbed(), {
+        title: EMBED_TITLES.LUXURY_SNEAKERS,
+        components: [buildLuxuryCatalogButtons('sneakers')],
+    });
+
+    await publishEmbedToChannel(watchCatalog, buildLuxuryWatchEmbed(), {
+        title: EMBED_TITLES.LUXURY_WATCHES,
+        components: [buildLuxuryCatalogButtons('watches')],
+    });
+
+    await publishEmbedToChannel(orderHere, buildLuxuryOrderPanelEmbed(orderHere, procurementChannel), {
+        title: EMBED_TITLES.LUXURY_ORDER,
+        components: buildLuxuryTicketButtonRows(),
+    });
+
+    await publishEmbedToChannel(procurementChannel, buildLuxuryProcurementEmbed(), {
+        title: EMBED_TITLES.LUXURY_PROCUREMENT,
+        components: [buildLuxuryProcurementButtonRow()],
+    });
+
+    await publishEmbedToChannel(paymentShipping, buildLuxuryPaymentEmbed(), {
+        title: EMBED_TITLES.LUXURY_PAYMENT,
+    });
+
+    await publishEmbedToChannel(
+        storeRules,
+        buildLuxuryStoreRulesEmbed({
+            orderChannel: orderHere,
+            procurementChannel,
+            paymentChannel: paymentShipping,
+            sneakerCatalog,
+            watchCatalog,
+        }),
+        { title: EMBED_TITLES.LUXURY_STORE_RULES }
+    );
+
+    const qcSneakerEmbed = new EmbedBuilder()
+        .setTitle('👟 Sneaker QC Gallery')
+        .setDescription(
+            'Staff posts pre-shipment QC photos and videos here.\n\nCustomers: request extra angles in your private ticket.'
+        )
+        .setColor(0xf97316);
+
+    await publishEmbedToChannel(sneakerQc, qcSneakerEmbed, { title: '👟 Sneaker QC Gallery' });
+
+    const qcWatchEmbed = new EmbedBuilder()
+        .setTitle('⌚ Watch QC Gallery')
+        .setDescription(
+            'Staff posts macro shots, movement checks, and wrist fit references here.\n\nCustomers: approve QC in your ticket before we ship.'
+        )
+        .setColor(0xeab308);
+
+    await publishEmbedToChannel(watchQc, qcWatchEmbed, { title: '⌚ Watch QC Gallery' });
+}
+
+async function refreshLuxuryStorePanels(guild) {
+    const config = getGuildConfig(guild.id);
+    if (!config?.luxury_store_complete) {
+        throw new Error('Luxury store is not configured. Run `/setup-luxury-store` first.');
+    }
+
+    const verifiedRoleId = config.verified_role_id;
+
+    let ordersCategory = null;
+    if (config.luxury_order_channel_id) {
+        const orderChannel = guild.channels.cache.get(config.luxury_order_channel_id);
+        ordersCategory = orderChannel?.parent ?? null;
+    }
+    if (!ordersCategory) {
+        ordersCategory = await findCategoryByNames(guild, ['🛒 ORDERS', '🛒 Orders & Tickets']);
+    }
+
+    const readOnly = verifiedRoleId
+        ? (g) => buildReadOnlyPermissions(g, verifiedRoleId)
+        : (g) => buildOnboardingReadOnlyPermissions(g);
+
+    let procurementChannel = config.luxury_procurement_channel_id
+        ? guild.channels.cache.get(config.luxury_procurement_channel_id)
+        : null;
+
+    if (!procurementChannel && ordersCategory) {
+        procurementChannel = await findOrCreateTextChannel(guild, {
+            aliases: ['custom-procurement', 'free-procurement', 'procurement', '自由采购'],
+            name: 'custom-procurement',
+            parent: ordersCategory,
+            topic: 'Free procurement — order anything beyond sneakers & watches',
+            permissionOverwrites: readOnly(guild),
+            reason: 'Free procurement channel',
+        });
+        saveGuildConfig(guild.id, { luxury_procurement_channel_id: procurementChannel.id });
+    }
+
+    const sneakerCatalog =
+        guild.channels.cache.get(config.luxury_sneaker_catalog_id) ??
+        (await findChannelByNames(guild, ['sneaker-catalog', 'catalog-sneakers']));
+    const watchCatalog =
+        guild.channels.cache.get(config.luxury_watch_catalog_id) ??
+        (await findChannelByNames(guild, ['watch-catalog', 'catalog-watches']));
+    const orderHere =
+        guild.channels.cache.get(config.luxury_order_channel_id) ??
+        (await findChannelByNames(guild, ['order-here', 'open-ticket', 'place-order']));
+    const paymentShipping = await findChannelByNames(guild, ['payment-shipping', 'payment-methods']);
+    const storeRules = await findChannelByNames(guild, ['store-rules', 'luxury-rules']);
+    const sneakerQc = await findChannelByNames(guild, ['sneaker-qc', 'sneaker-qc-gallery']);
+    const watchQc = await findChannelByNames(guild, ['watch-qc', 'watch-qc-gallery']);
+
+    const missing = [];
+    if (!sneakerCatalog) missing.push('sneaker-catalog');
+    if (!watchCatalog) missing.push('watch-catalog');
+    if (!orderHere) missing.push('order-here');
+    if (!procurementChannel) missing.push('custom-procurement');
+    if (!paymentShipping) missing.push('payment-shipping');
+    if (!storeRules) missing.push('store-rules');
+    if (!sneakerQc) missing.push('sneaker-qc');
+    if (!watchQc) missing.push('watch-qc');
+    if (missing.length) {
+        throw new Error(`Missing channels: ${missing.join(', ')}. Run \`/setup-luxury-store\` to repair.`);
+    }
+
+    saveGuildConfig(guild.id, {
+        luxury_store_rules_channel_id: storeRules.id,
+        luxury_procurement_channel_id: procurementChannel.id,
+    });
+
+    await publishLuxuryStorePanels(guild, {
+        sneakerCatalog,
+        watchCatalog,
+        orderHere,
+        procurementChannel,
+        paymentShipping,
+        storeRules,
+        sneakerQc,
+        watchQc,
+    });
+
+    return { orderHere, procurementChannel, storeRules, sneakerCatalog, watchCatalog };
 }
 
 async function runOneClickSetup(guild) {
@@ -1662,6 +2092,10 @@ async function registerCommands() {
             name: 'setup-luxury-store',
             description: 'Deploy sneakers & watches store with invoice tickets (admin only)',
         },
+        {
+            name: 'publish-luxury-panels',
+            description: 'Refresh store panels, buttons & free procurement layout (admin only)',
+        },
     ];
 
     const rest = new REST({ version: '10' }).setToken(TOKEN);
@@ -1676,7 +2110,13 @@ async function registerCommands() {
 }
 
 function getCliGuildId() {
-    const flags = ['--setup', '--setup-member-count', '--setup-luxury-store', '--cleanup-luxury'];
+    const flags = [
+        '--setup',
+        '--setup-member-count',
+        '--setup-luxury-store',
+        '--publish-luxury-panels',
+        '--cleanup-luxury',
+    ];
     for (let i = 0; i < process.argv.length; i++) {
         const next = process.argv[i + 1];
         if (flags.includes(process.argv[i]) && next && !next.startsWith('--')) {
@@ -1704,6 +2144,10 @@ async function runCliSetupTask(guild, tasks) {
             await cleanupLuxuryStoreFromGuild(guild);
             console.log('Luxury store removed from hub server');
         }
+        if (task === 'publish-luxury-panels') {
+            const result = await refreshLuxuryStorePanels(guild);
+            console.log('Luxury panels refreshed:', Object.keys(result).join(', '));
+        }
     }
 }
 
@@ -1712,6 +2156,7 @@ async function maybeAutoSetup() {
         { flag: '--setup', task: 'main' },
         { flag: '--setup-member-count', task: 'member-count' },
         { flag: '--setup-luxury-store', task: 'luxury-store' },
+        { flag: '--publish-luxury-panels', task: 'publish-luxury-panels' },
         { flag: '--cleanup-luxury', task: 'cleanup-luxury' },
     ];
 
@@ -1748,7 +2193,14 @@ client.once(Events.ClientReady, async () => {
 client.on(Events.GuildMemberAdd, async (member) => {
     try {
         const config = getGuildConfig(member.guild.id);
-        if (!config?.setup_complete && !config?.luxury_store_complete) return;
+        if (!config?.setup_complete && !config?.luxury_store_complete) {
+            console.log(
+                `Member joined ${member.guild.name} (${member.guild.id}) but server is not configured — skipping welcome`
+            );
+            return;
+        }
+
+        console.log(`New member: ${member.user.tag} joined ${member.guild.name} (${member.guild.id})`);
 
         if (config.setup_complete) {
             if (config.unverified_role_id) {
@@ -1759,7 +2211,13 @@ client.on(Events.GuildMemberAdd, async (member) => {
             }
         }
 
-        await sendJoinDirectMessage(member, config);
+        const dmSent = await sendJoinDirectMessage(member, config);
+        if (!dmSent) {
+            await sendJoinWelcomeFallback(member, config);
+        }
+        if (config.luxury_store_complete) {
+            await sendJoinRulesPing(member, config);
+        }
         scheduleMemberCountUpdate(member.guild);
     } catch (error) {
         console.error('Failed to handle new member:', error);
@@ -1782,12 +2240,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
                 return;
             }
 
-            const categoryMap = {
-                luxury_ticket_sneakers: 'Sneakers',
-                luxury_ticket_watches: 'Watches',
-                luxury_ticket_mixed: 'Mixed / Custom',
-            };
-            const category = categoryMap[interaction.customId] ?? 'General';
+            const category = LUXURY_TICKET_CATEGORIES[interaction.customId] ?? 'General';
 
             await interaction.deferReply({ ephemeral: true });
             const result = await createLuxuryTicket(
@@ -2065,20 +2518,54 @@ client.on(Events.InteractionCreate, async (interaction) => {
             const summary = new EmbedBuilder()
                 .setTitle('✅ Luxury Store Deployed')
                 .setDescription(
-                    'Sneakers & watches storefront with invoice tickets is live.\n\n' +
+                    'Storefront with invoice tickets and free procurement is live.\n\n' +
                         `**Staff role:** ${result.staffRole}\n` +
+                        `**Order center:** ${result.orderHere}\n` +
+                        `**Free procurement:** ${result.procurementChannel}\n` +
                         `**Sneaker catalog:** ${result.sneakerCatalog}\n` +
                         `**Watch catalog:** ${result.watchCatalog}\n` +
-                        `**Order panel:** ${result.orderHere}\n` +
                         `**Payment info:** ${result.paymentShipping}\n` +
                         `**Store rules:** ${result.storeRules}\n` +
                         `**Ticket category:** ${result.ticketCategory}\n` +
                         `**QC galleries:** ${result.sneakerQc}, ${result.watchQc}\n` +
                         `**General chat:** ${result.generalChat}\n` +
                         `**Discussion:** ${result.sneakerChat}, ${result.watchChat}\n\n` +
-                        'Customers click **Order Sneakers / Watches** to open a private invoice ticket. Assign **Luxury Sales Staff** to your team.'
+                        'Ticket types: **Sneakers** • **Watches** • **Mixed** • **Free Procurement**. Assign **Luxury Sales Staff** to your team.'
                 )
                 .setColor(0xf59e0b);
+
+            await interaction.editReply({ embeds: [summary] });
+            return;
+        }
+
+        if (interaction.commandName === 'publish-luxury-panels') {
+            if (!memberCanManage(interaction)) {
+                await interaction.reply({ content: '❌ Admin only.', ephemeral: true });
+                return;
+            }
+
+            if (interaction.guild.id === HUB_GUILD_ID) {
+                await interaction.reply({
+                    content: '❌ Run this on the **RED Sneaker and watch** server, not the main hub.',
+                    ephemeral: true,
+                });
+                return;
+            }
+
+            await interaction.deferReply({ ephemeral: true });
+            const result = await refreshLuxuryStorePanels(interaction.guild);
+
+            const summary = new EmbedBuilder()
+                .setTitle('✅ Store Panels Updated')
+                .setDescription(
+                    'All storefront embeds and ticket buttons have been refreshed.\n\n' +
+                        `**Order center:** ${result.orderHere}\n` +
+                        `**Free procurement:** ${result.procurementChannel}\n` +
+                        `**Sneaker catalog:** ${result.sneakerCatalog}\n` +
+                        `**Watch catalog:** ${result.watchCatalog}\n\n` +
+                        'Customers can now open **Free Procurement** tickets for any item.'
+                )
+                .setColor(0xa855f7);
 
             await interaction.editReply({ embeds: [summary] });
         }

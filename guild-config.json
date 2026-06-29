@@ -1,0 +1,38 @@
+{
+  "1518315622663065650": {
+    "welcome_channel_id": "1518336125876305940",
+    "rules_channel_id": "1518336122281918536",
+    "verify_channel_id": "1518336124316025032",
+    "sales_channel_id": "1518336384731971726",
+    "verified_role_id": "1518330635364732969",
+    "unverified_role_id": "1518330636484612159",
+    "setup_complete": 1,
+    "member_count_channel_id": "1518338715100123327",
+    "member_stats_category_id": "1518338710410629160",
+    "member_stats_info_channel_id": "1518338718073622734",
+    "member_count_enabled": 1,
+    "luxury_store_complete": 0,
+    "luxury_staff_role_id": null,
+    "luxury_ticket_category_id": null,
+    "luxury_order_channel_id": null,
+    "luxury_sneaker_catalog_id": null,
+    "luxury_watch_catalog_id": null,
+    "sneaker_channel_id": "1518342148418699526",
+    "sneaker_server_invite": "https://discord.gg/jyPdaQvHeZ"
+  },
+  "1518341033899856052": {
+    "member_count_channel_id": "1518342886805082202",
+    "member_stats_category_id": "1518342881952268358",
+    "member_stats_info_channel_id": "1518342890164715522",
+    "member_count_enabled": 1,
+    "luxury_store_complete": 1,
+    "luxury_staff_role_id": "1518342895088963635",
+    "luxury_ticket_category_id": "1518343144502984787",
+    "luxury_order_channel_id": "1518343148588367903",
+    "luxury_sneaker_catalog_id": "1518342902416150690",
+    "luxury_watch_catalog_id": "1518342924662735049",
+    "general_chat_channel_id": "1518345789573955684",
+    "luxury_procurement_channel_id": "1521055762422694008",
+    "luxury_store_rules_channel_id": "1518343156465270844"
+  }
+}

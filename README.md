@@ -62,8 +62,9 @@ node index.js --cleanup-luxury YOUR_GUILD_ID
 | `/publish-verify` | Publish or update verification panel |
 | `/setup-member-count` | Create live member count voice channel |
 | `/setup-luxury-store` | Deploy sneakers & watches store with invoice tickets |
+| `/publish-luxury-panels` | Refresh store embeds, buttons & procurement layout |
 
-> `/setup-luxury-store` is blocked on the main hub server. Run it on the **RED Sneaker and watch** server only.
+> `/setup-luxury-store` and `/publish-luxury-panels` are blocked on the main hub server. Run them on the **RED Sneaker and watch** server only.
 
 ## RED Main Hub Layout (`/setup`)
 
@@ -84,8 +85,8 @@ node index.js --cleanup-luxury YOUR_GUILD_ID
 | 💬 Community | general-chat |
 | 👟 SNEAKERS | sneaker-catalog, sneaker-qc, sneaker-chat |
 | ⌚ WATCHES | watch-catalog, watch-qc, watch-chat |
-| 🛒 ORDERS | order-here, payment-shipping, store-rules |
-| 🎫 Active Tickets | Private invoice tickets (auto-created) |
+| 🛒 ORDERS | order-here, custom-procurement, payment-shipping, store-rules |
+| 🎫 Active Tickets | Private invoice tickets — Sneakers / Watches / Mixed / Free Procurement |
 | 📊 Live Stats | voice `Members: N`, stats-info (after `/setup-member-count`) |
 
 ## Do NOT Upload
